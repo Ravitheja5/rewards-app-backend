@@ -1,8 +1,13 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+const isProduction = process.env.NODE_ENV === 'production' || !!process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  ssl: isProduction && !process.env.DATABASE_URL.includes('localhost') 
+    ? { rejectUnauthorized: false } 
+    : false
 });
 
 const initDb = async () => {
@@ -37,10 +42,12 @@ const initDb = async () => {
     );
   `;
   try {
-    await pool.query(query);
-    console.log('✅ PostgreSQL Schema & Tables initialized successfully in quizcoins');
+    if (process.env.DATABASE_URL) {
+      await pool.query(query);
+      console.log('✅ PostgreSQL Schema & Tables initialized successfully');
+    }
   } catch (err) {
-    console.error('❌ Table init error:', err);
+    console.error('❌ Table init error:', err.message);
   }
 };
 
