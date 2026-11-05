@@ -11,8 +11,10 @@ const pool = new Pool({
 });
 
 const initDb = async () => {
-  const query = `
-    CREATE TABLE IF NOT EXISTS users (
+  if (!process.env.DATABASE_URL) return;
+
+  const queries = [
+    `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       phone VARCHAR(15) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
@@ -21,31 +23,30 @@ const initDb = async () => {
       daily_task_count INTEGER DEFAULT 0,
       last_active_date DATE DEFAULT CURRENT_DATE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS task_completions (
+    );`,
+    `CREATE TABLE IF NOT EXISTS task_completions (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL,
       task_id VARCHAR(50) NOT NULL,
       points_earned INTEGER NOT NULL,
       completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS recharges (
+    );`,
+    `CREATE TABLE IF NOT EXISTS recharges (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL,
       phone VARCHAR(15) NOT NULL,
       operator VARCHAR(20) NOT NULL,
       amount INTEGER DEFAULT 49,
       status VARCHAR(20) DEFAULT 'Processing',
       requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `;
+    );`
+  ];
+
   try {
-    if (process.env.DATABASE_URL) {
-      await pool.query(query);
-      console.log('✅ PostgreSQL Schema & Tables initialized successfully');
+    for (const q of queries) {
+      await pool.query(q);
     }
+    console.log('✅ PostgreSQL Tables verified & initialized successfully');
   } catch (err) {
     console.error('❌ Table init error:', err.message);
   }
