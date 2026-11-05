@@ -6,15 +6,12 @@ require('dotenv').config();
 
 const app = express();
 
-// Full CORS setup for browser fetch & preflight
+// Global CORS Middleware (Handles preflight automatically without routing errors)
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
-
-// Handle preflight explicitly
-app.options('*', cors());
 
 app.use(express.json());
 
@@ -59,7 +56,7 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Account already exists. Please login.' });
     }
     console.error('Register error:', err);
-    res.status(500).json({ success: false, message: 'Internal server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -87,7 +84,7 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(200).json({ success: true, user: userSafe });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ success: false, message: 'Internal server error: ' + err.message });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
