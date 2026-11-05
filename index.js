@@ -1,12 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const pool = require('./db');
 require('dotenv').config();
 
 const app = express();
 
-// Global CORS Middleware (Handles preflight automatically without routing errors)
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -17,9 +17,8 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-// Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ status: 'active', message: 'Finora Rewards Backend is Running Live' });
+  res.json({ status: 'active', message: 'RewardRush Backend is Running Live' });
 });
 
 // 1. REGISTER
@@ -43,11 +42,14 @@ app.post('/api/auth/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Auto-generate unique referral code (e.g., RR9421A)
+    const referralCode = 'RR' + crypto.randomBytes(3).toString('hex').toUpperCase();
+
     const result = await pool.query(
-      `INSERT INTO users (phone, password, device_id, points) 
-       VALUES ($1, $2, $3, 100) 
-       RETURNING id, phone, points, daily_task_count`,
-      [phone, hashedPassword, deviceId || 'dev_default']
+      `INSERT INTO users (phone, password, device_id, points, referral_code) 
+       VALUES ($1, $2, $3, 100, $4) 
+       RETURNING id, phone, points, daily_task_count, referral_code`,
+      [phone, hashedPassword, deviceId || 'dev_default', referralCode]
     );
 
     res.status(201).json({ success: true, user: result.rows[0] });
