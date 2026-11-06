@@ -4,6 +4,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
+const initCpxRoutes = require("./routes_cpx");
 app.use(cors());
 app.use(express.json());
 
@@ -204,5 +205,6 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
+initCpxRoutes(app, pool);
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
