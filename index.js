@@ -48,41 +48,32 @@ app.get('/api/user/me', async (req, res) => {
 const MAX_DEVICE_LIMIT = 2;
 
 app.post('/api/auth/register', async (req, res) => {
-  const { name, phone, password, deviceId } = req.body;
+  const { name, phone, password, device_id } = req.body;
 
-  if (!name || name.trim().length < 2) {
-    return res.status(400).json({ success: false, message: 'Please enter a valid full name.' });
-  }
-
-  if (!/^[6-9]\d{9}$/.test(phone)) {
-    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit Indian mobile number.' });
-  }
-
-  if (!password || !strongPasswordRegex.test(password)) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Password must be 8-16 characters and contain uppercase, lowercase, number, and special char (@$!%*?&#).' 
-    });
+  if (!phone || !password) {
+    return res.status(400).json({ success: false, message: 'Phone mariyu Password mandatory!' });
   }
 
   try {
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    const referralCode = 'RR' + crypto.randomBytes(3).toString('hex').toUpperCase();
+    const existing = await pool.query('SELECT phone FROM users WHERE phone = $1;', [phone]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'Ee mobile number already register ayindi!' });
+    }
 
-    const result = await pool.query(
-      `INSERT INTO users (name, phone, password, device_id, points, referral_code) 
-       VALUES ($1, $2, $3, $4, 100, $5) 
-       RETURNING id, name, phone, points, daily_task_count, referral_code`,
-      [name.trim(), phone, hashedPassword, deviceId || 'device_default', referralCode]
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(password, salt);
+    const refCode = 'RR' + Math.random().toString(36).substring(2, 7).toUpperCase();
+
+    const insertRes = await pool.query(
+      'INSERT INTO users (name, phone, password, device_id, points, daily_task_count, referral_code) VALUES ($1, $2, $3, $4, 100, 0, $5) RETURNING id, name, phone, points, referral_code;',
+      [name || 'Member', phone, hash, device_id || 'browser', refCode]
     );
 
-    res.status(201).json({ success: true, user: result.rows[0] });
+    console.log('✅ NEW USER REGISTERED SUCCESSFULLY:', insertRes.rows[0]);
+    return res.status(201).json({ success: true, user: insertRes.rows[0] });
   } catch (err) {
-    if (err.code === '23505') {
-      return res.status(400).json({ success: false, message: 'Mobile number already registered. Please login.' });
-    }
-    res.status(500).json({ success: false, message: err.message });
+    console.error('❌ Register Database Error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
