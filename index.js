@@ -23,7 +23,7 @@ app.get('/', (req, res) => {
 });
 
 // Strong Password Regex: min 8, max 16, uppercase, lowercase, number, special char
-const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,16}$/;
+const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!\%*?&#]{8,16}$/;
 
 // 1. REGISTER
 app.post('/api/auth/register', async (req, res) => {
@@ -40,7 +40,7 @@ app.post('/api/auth/register', async (req, res) => {
   if (!password || !strongPasswordRegex.test(password)) {
     return res.status(400).json({ 
       success: false, 
-      message: 'Password must be 8-16 characters and contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&#).' 
+      message: 'Password must be 8-16 characters and contain uppercase, lowercase, number, and special char (@$!%*?&#).' 
     });
   }
 
@@ -85,7 +85,6 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid password. Try again.' });
     }
 
-    // Reset daily tasks count if day changed
     const today = new Date().toISOString().split('T')[0];
     const lastActive = user.last_active_date ? new Date(user.last_active_date).toISOString().split('T')[0] : '';
     if (today !== lastActive) {
@@ -117,7 +116,7 @@ app.post('/api/user/daily-checkin', async (req, res) => {
 
     const updated = await pool.query(
       `UPDATE users 
-       SET points = points + 25, last_active_date = CURRENT_DATE, daily_task_count = 0 
+       SET points = points + 25, last_active_date = CURRENT_DATE 
        WHERE id = $1 
        RETURNING id, name, phone, points, daily_task_count`,
       [userId]
@@ -129,7 +128,7 @@ app.post('/api/user/daily-checkin', async (req, res) => {
   }
 });
 
-// 4. COMPLETE TASK (Daily Cap 130 tasks = 1 Recharge Pack Target)
+// 4. MANUAL / DISPLAY AD TASK COMPLETE
 app.post('/api/tasks/complete', async (req, res) => {
   const { userId, taskId, points } = req.body;
 
@@ -163,7 +162,49 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
-// 5. STORE RECHARGE REQUEST
+// 5. vCOMMISSION S2S POSTBACK WEBHOOK (Automated Wallet Credit)
+app.get('/api/postback/vcommission', async (req, res) => {
+  const { sub1, aff_sub, click_id, payout, status, campaign_id } = req.query;
+  const userId = sub1 || aff_sub;
+
+  if (!userId) {
+    return res.status(400).send('ERROR: Missing User ID parameter');
+  }
+
+  try {
+    const pointsToAdd = payout ? Math.round(parseFloat(payout) * 10) : 1000;
+
+    await pool.query('BEGIN');
+    const updateRes = await pool.query(
+      `UPDATE users 
+       SET points = points + $1 
+       WHERE id = $2 
+       RETURNING id, points`,
+      [pointsToAdd, userId]
+    );
+
+    if (updateRes.rows.length === 0) {
+      await pool.query('ROLLBACK');
+      return res.status(404).send('User not found');
+    }
+
+    await pool.query(
+      `INSERT INTO task_completions (user_id, task_id, points_earned) 
+       VALUES ($1, $2, $3)`,
+      [userId, `vcomm_${campaign_id || click_id || 'conversion'}`, pointsToAdd]
+    );
+
+    await pool.query('COMMIT');
+    console.log(`✅ S2S Postback Success: Credited ${pointsToAdd} points to user ${userId}`);
+    return res.status(200).send('OK');
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    console.error('❌ Postback Error:', err.message);
+    return res.status(500).send('Database Error');
+  }
+});
+
+// 6. STORE RECHARGE REQUEST
 app.post('/api/store/recharge', async (req, res) => {
   const { userId, phone, operator } = req.body;
 
@@ -190,11 +231,11 @@ app.post('/api/store/recharge', async (req, res) => {
   }
 });
 
-// 6. ADMIN GET RECHARGES
+// 7. ADMIN RECHARGES
 app.get('/api/admin/recharges', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
-    return res.status(401).json({ success: false, message: 'Unauthorized Admin Access' });
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
   try {
@@ -210,11 +251,11 @@ app.get('/api/admin/recharges', async (req, res) => {
   }
 });
 
-// 7. ADMIN UPDATE STATUS
+// 8. ADMIN STATUS UPDATE
 app.post('/api/admin/recharge/status', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
-    return res.status(401).json({ success: false, message: 'Unauthorized Admin Access' });
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
   const { id, status } = req.body;
