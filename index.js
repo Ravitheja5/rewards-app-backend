@@ -177,5 +177,32 @@ app.get('/api/admin/all', async (req, res) => {
   }
 });
 
+
+// Auto-credit points after task timer completes
+app.post('/api/tasks/complete', async (req, res) => {
+  try {
+    const { phone, points = 38, taskId } = req.body;
+    const cleanPhone = String(phone || '').replace(/D/g, '').slice(-10);
+
+    const userRes = await pool.query('SELECT * FROM users WHERE RIGHT(phone, 10) = $1', [cleanPhone]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const updated = await pool.query(
+      'UPDATE users SET points = points + $1, daily_task_count = daily_task_count + 1 WHERE id = $2 RETURNING *',
+      [points, userRes.rows[0].id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Points auto-credited successfully!',
+      user: updated.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
