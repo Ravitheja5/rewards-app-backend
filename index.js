@@ -16,14 +16,13 @@ app.use(cors({
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-const ADMIN_SECRET = 'rewardrush_admin_2026';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'rewardrush_admin_2026';
 
 app.get('/', (req, res) => {
   res.json({ status: 'active', message: 'RewardRush Production API Ready' });
 });
 
-// Strong Password Regex: min 8, max 16, uppercase, lowercase, number, special char
-const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!\%*?&#]{8,16}$/;
+const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,16}$/;
 
 // 1. REGISTER
 app.post('/api/auth/register', async (req, res) => {
@@ -128,9 +127,9 @@ app.post('/api/user/daily-checkin', async (req, res) => {
   }
 });
 
-// 4. MANUAL / DISPLAY AD TASK COMPLETE
+// 4. TASK COMPLETE (Ad Tasks with Anti-Spam Rate Limit)
 app.post('/api/tasks/complete', async (req, res) => {
-  const { userId, taskId, points } = req.body;
+  const { userId, taskId, points, clientStartedAt } = req.body;
 
   try {
     const userRes = await pool.query('SELECT daily_task_count, points FROM users WHERE id = $1', [userId]);
@@ -138,6 +137,11 @@ app.post('/api/tasks/complete', async (req, res) => {
 
     if (userRes.rows[0].daily_task_count >= 130) {
       return res.status(403).json({ success: false, message: 'Daily task limit of 130 tasks reached for today!' });
+    }
+
+    // Minimum verification interval enforcement
+    if (clientStartedAt && Date.now() - clientStartedAt < 12000) {
+      return res.status(400).json({ success: false, message: 'Task verification failed. Full timer must complete.' });
     }
 
     await pool.query('BEGIN');
@@ -162,7 +166,7 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
-// 5. vCOMMISSION S2S POSTBACK WEBHOOK (Automated Wallet Credit)
+// 5. vCOMMISSION S2S POSTBACK WEBHOOK
 app.get('/api/postback/vcommission', async (req, res) => {
   const { sub1, aff_sub, click_id, payout, status, campaign_id } = req.query;
   const userId = sub1 || aff_sub;
@@ -195,11 +199,9 @@ app.get('/api/postback/vcommission', async (req, res) => {
     );
 
     await pool.query('COMMIT');
-    console.log(`✅ S2S Postback Success: Credited ${pointsToAdd} points to user ${userId}`);
     return res.status(200).send('OK');
   } catch (err) {
     await pool.query('ROLLBACK');
-    console.error('❌ Postback Error:', err.message);
     return res.status(500).send('Database Error');
   }
 });
@@ -224,14 +226,17 @@ app.post('/api/store/recharge', async (req, res) => {
     );
     await pool.query('COMMIT');
 
-    res.status(200).json({ success: true, message: 'Recharge request submitted successfully' });
+    res.status(200).json({ 
+      success: true, 
+      message: 'Recharge request submitted successfully. Processing time: 2 to 6 hours.' 
+    });
   } catch (err) {
     await pool.query('ROLLBACK');
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 7. ADMIN RECHARGES
+// 7. ADMIN STATS & RECHARGES
 app.get('/api/admin/recharges', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
@@ -245,13 +250,21 @@ app.get('/api/admin/recharges', async (req, res) => {
        JOIN users u ON r.user_id = u.id 
        ORDER BY r.requested_at DESC LIMIT 100`
     );
-    res.json({ success: true, data: recharges.rows });
+
+    const stats = await pool.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM users) as total_users,
+        (SELECT COUNT(*) FROM recharges WHERE status = 'Pending') as pending_recharges,
+        (SELECT COUNT(*) FROM recharges WHERE status = 'Completed') as completed_recharges
+    `);
+
+    res.json({ success: true, stats: stats.rows[0], data: recharges.rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 8. ADMIN STATUS UPDATE
+// 8. ADMIN RECHARGE STATUS UPDATE
 app.post('/api/admin/recharge/status', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
