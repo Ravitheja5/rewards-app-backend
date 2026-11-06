@@ -2,15 +2,6 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 
-const CPX_WHITELISTED_IPS = [
-  '188.40.3.73',
-  '159.69.213.109',
-  '144.76.103.111',
-  '157.90.97.92',
-  '127.0.0.1',
-  '::1'
-];
-
 function verifyCpxHash(transId, incomingHash, appSecret) {
   if (!transId || !incomingHash || !appSecret) return false;
   const expectedHash = crypto.createHash('md5').update(`${transId}-${appSecret}`).digest('hex');
@@ -20,28 +11,11 @@ function verifyCpxHash(transId, incomingHash, appSecret) {
   return crypto.timingSafeEqual(incomingBuffer, expectedBuffer);
 }
 
-// IP Middleware: Allows CPX test callbacks & whitelisted IPs
-function checkIpOrPayload(req, res, next) {
-  const clientIp = (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '').replace(/^.*:/, '').trim();
-
-  // Allow whitelisted CPX servers
-  if (CPX_WHITELISTED_IPS.includes(clientIp)) {
-    return next();
-  }
-
-  // Allow test calls that contain mandatory CPX test parameters
-  const params = { ...req.query, ...req.body };
-  if (params.trans_id && params.status !== undefined) {
-    return next();
-  }
-
-  console.warn(`[CPX Security Alert] Blocked IP without valid params: ${clientIp}`);
-  return res.status(403).send('Forbidden: IP not authorized');
-}
-
 module.exports = function(pool) {
-  router.all('/api/webhooks/cpx', checkIpOrPayload, async (req, res) => {
+  router.all('/api/webhooks/cpx', async (req, res) => {
     const params = { ...req.query, ...req.body };
+    console.log('[CPX Incoming Webhook Request]:', JSON.stringify(params));
+
     const {
       status,
       trans_id,
@@ -79,7 +53,7 @@ module.exports = function(pool) {
     try {
       await client.query('BEGIN');
 
-      // Match user by id OR phone
+      // Match user by ID (e.g. 2) OR by 10-digit phone number
       const userRes = await client.query(
         'SELECT id, phone, points FROM users WHERE id::text = $1 OR RIGHT(phone, 10) = RIGHT($1, 10) FOR UPDATE',
         [cleanUser]
@@ -87,6 +61,7 @@ module.exports = function(pool) {
 
       if (userRes.rows.length === 0) {
         await client.query('ROLLBACK');
+        console.warn(`[CPX Warning] User not found for identifier: ${cleanUser}`);
         return res.status(404).send('ERROR: User not found');
       }
 
@@ -98,7 +73,7 @@ module.exports = function(pool) {
         [trans_id]
       );
 
-      // Handle Reversal (status = 2)
+      // Handle Reversal / Cancellation
       if (isCancellation) {
         if (transRes.rows.length === 0) {
           await client.query(
@@ -134,13 +109,13 @@ module.exports = function(pool) {
         return res.status(200).send('OK');
       }
 
-      // Idempotency: if already processed, return OK
+      // Idempotency: prevent double crediting
       if (transRes.rows.length > 0) {
         await client.query('COMMIT');
         return res.status(200).send('OK');
       }
 
-      // Calculate Points
+      // Calculate reward points
       const usdVal = parseFloat(amount_usd || 0);
       const isBonus = type === 'bonus' || type === 'screenout_bonus';
       const factor = isBonus ? BONUS_FACTOR : CURRENCY_FACTOR;
@@ -171,6 +146,7 @@ module.exports = function(pool) {
       );
 
       await client.query('COMMIT');
+      console.log(`[CPX Success] Credited ${pointsToCredit} points to user ${user.id} (${user.phone})`);
       return res.status(200).send('OK');
     } catch (err) {
       await client.query('ROLLBACK');

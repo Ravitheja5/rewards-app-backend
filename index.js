@@ -5,7 +5,6 @@ const { Pool } = require('pg');
 
 const app = express();
 app.set("trust proxy", 1);
-const initCpxRoutes = require("./routes_cpx");
 app.use(cors());
 app.use(express.json());
 
@@ -206,7 +205,7 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
-initCpxRoutes(app, pool);
+
 const cpxRouter = require("./routes/cpx")(pool);
 app.use(cpxRouter);
 
