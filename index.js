@@ -24,6 +24,25 @@ app.get('/', (req, res) => {
 
 const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,16}$/;
 
+// LIVE USER DATA SYNC (Frontend eppudu reload ayina direct DB nundi sync avvadaniki)
+app.get('/api/user/me', async (req, res) => {
+  const { phone } = req.query;
+  if (!phone) return res.status(400).json({ success: false, message: 'Phone required' });
+
+  try {
+    const result = await pool.query(
+      'SELECT id, name, phone, points, daily_task_count, referral_code FROM users WHERE phone = $1',
+      [phone]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    res.json({ success: true, user: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // 1. REGISTER
 app.post('/api/auth/register', async (req, res) => {
   const { name, phone, password, deviceId } = req.body;
@@ -64,7 +83,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 2. LOGIN
+// 2. LOGIN (Always returns current live points and name)
 app.post('/api/auth/login', async (req, res) => {
   const { phone, password } = req.body;
 
@@ -127,21 +146,16 @@ app.post('/api/user/daily-checkin', async (req, res) => {
   }
 });
 
-// 4. TASK COMPLETE (Ad Tasks with Anti-Spam Rate Limit)
+// 4. TASK COMPLETE
 app.post('/api/tasks/complete', async (req, res) => {
-  const { userId, taskId, points, clientStartedAt } = req.body;
+  const { userId, taskId, points } = req.body;
 
   try {
     const userRes = await pool.query('SELECT daily_task_count, points FROM users WHERE id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
     if (userRes.rows[0].daily_task_count >= 130) {
-      return res.status(403).json({ success: false, message: 'Daily task limit of 130 tasks reached for today!' });
-    }
-
-    // Minimum verification interval enforcement
-    if (clientStartedAt && Date.now() - clientStartedAt < 12000) {
-      return res.status(400).json({ success: false, message: 'Task verification failed. Full timer must complete.' });
+      return res.status(403).json({ success: false, message: 'Daily limit of 130 tasks reached for today!' });
     }
 
     await pool.query('BEGIN');
@@ -166,47 +180,7 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
-// 5. vCOMMISSION S2S POSTBACK WEBHOOK
-app.get('/api/postback/vcommission', async (req, res) => {
-  const { sub1, aff_sub, click_id, payout, status, campaign_id } = req.query;
-  const userId = sub1 || aff_sub;
-
-  if (!userId) {
-    return res.status(400).send('ERROR: Missing User ID parameter');
-  }
-
-  try {
-    const pointsToAdd = payout ? Math.round(parseFloat(payout) * 10) : 1000;
-
-    await pool.query('BEGIN');
-    const updateRes = await pool.query(
-      `UPDATE users 
-       SET points = points + $1 
-       WHERE id = $2 
-       RETURNING id, points`,
-      [pointsToAdd, userId]
-    );
-
-    if (updateRes.rows.length === 0) {
-      await pool.query('ROLLBACK');
-      return res.status(404).send('User not found');
-    }
-
-    await pool.query(
-      `INSERT INTO task_completions (user_id, task_id, points_earned) 
-       VALUES ($1, $2, $3)`,
-      [userId, `vcomm_${campaign_id || click_id || 'conversion'}`, pointsToAdd]
-    );
-
-    await pool.query('COMMIT');
-    return res.status(200).send('OK');
-  } catch (err) {
-    await pool.query('ROLLBACK');
-    return res.status(500).send('Database Error');
-  }
-});
-
-// 6. STORE RECHARGE REQUEST
+// 5. STORE RECHARGE REQUEST
 app.post('/api/store/recharge', async (req, res) => {
   const { userId, phone, operator } = req.body;
 
@@ -236,7 +210,7 @@ app.post('/api/store/recharge', async (req, res) => {
   }
 });
 
-// 7. ADMIN STATS & RECHARGES
+// 6. ADMIN STATS & RECHARGES
 app.get('/api/admin/recharges', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
@@ -264,7 +238,7 @@ app.get('/api/admin/recharges', async (req, res) => {
   }
 });
 
-// 8. ADMIN RECHARGE STATUS UPDATE
+// 7. ADMIN RECHARGE STATUS UPDATE
 app.post('/api/admin/recharge/status', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
