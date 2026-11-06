@@ -123,7 +123,7 @@ app.post('/api/rewards/redeem', async (req, res) => {
     );
 
     const redemption = await pool.query(
-      'INSERT INTO redemptions (user_id, phone, target_phone, operator, points_cost, reward_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      'INSERT INTO redemptions (user_id, phone, target_phone, operator, points_cost, points_spent, reward_type, pack_name, status) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8) RETURNING *',
       [user.id, userPhone, target, operator || 'Jio', pointsCost, rewardType, 'PENDING']
     );
 
