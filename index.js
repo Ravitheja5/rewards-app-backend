@@ -10,52 +10,58 @@ const app = express();
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'admin-secret']
 }));
 
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'rewardrush_admin_2026';
+const ADMIN_SECRET = 'rewardrush_admin_2026';
 
 app.get('/', (req, res) => {
-  res.json({ status: 'active', message: 'RewardRush Production Engine Active' });
+  res.json({ status: 'active', message: 'RewardRush Production API Ready' });
 });
+
+// Strong Password Regex: min 8, max 16, uppercase, lowercase, number, special char
+const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,16}$/;
 
 // 1. REGISTER
 app.post('/api/auth/register', async (req, res) => {
-  const { phone, password, deviceId } = req.body;
+  const { name, phone, password, deviceId } = req.body;
 
-  if (!phone || !password) {
-    return res.status(400).json({ success: false, message: 'Phone and password are required' });
+  if (!name || name.trim().length < 2) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid full name.' });
   }
+
   if (!/^[6-9]\d{9}$/.test(phone)) {
-    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit mobile number' });
+    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit Indian mobile number.' });
+  }
+
+  if (!password || !strongPasswordRegex.test(password)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Password must be 8-16 characters and contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&#).' 
+    });
   }
 
   try {
-    const deviceCheck = await pool.query('SELECT COUNT(*) FROM users WHERE device_id = $1', [deviceId || 'dev_default']);
-    if (parseInt(deviceCheck.rows[0].count) >= 2) {
-      return res.status(403).json({ success: false, message: 'Device limit reached: Max 2 numbers per device.' });
-    }
-
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     const referralCode = 'RR' + crypto.randomBytes(3).toString('hex').toUpperCase();
 
     const result = await pool.query(
-      `INSERT INTO users (phone, password, device_id, points, referral_code, daily_task_count, last_active_date) 
-       VALUES ($1, $2, $3, 100, $4, 0, CURRENT_DATE) 
-       RETURNING id, phone, points, daily_task_count, referral_code`,
-      [phone, hashedPassword, deviceId || 'dev_default', referralCode]
+      `INSERT INTO users (name, phone, password, device_id, points, referral_code) 
+       VALUES ($1, $2, $3, $4, 100, $5) 
+       RETURNING id, name, phone, points, daily_task_count, referral_code`,
+      [name.trim(), phone, hashedPassword, deviceId || 'device_default', referralCode]
     );
 
     res.status(201).json({ success: true, user: result.rows[0] });
   } catch (err) {
     if (err.code === '23505') {
-      return res.status(400).json({ success: false, message: 'Account already exists. Please login.' });
+      return res.status(400).json({ success: false, message: 'Mobile number already registered. Please login.' });
     }
-    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -64,13 +70,13 @@ app.post('/api/auth/login', async (req, res) => {
   const { phone, password } = req.body;
 
   if (!phone || !password) {
-    return res.status(400).json({ success: false, message: 'Enter mobile and password' });
+    return res.status(400).json({ success: false, message: 'Mobile number and password required' });
   }
 
   try {
     const result = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Account not found. Please register first.' });
+      return res.status(404).json({ success: false, message: 'Account not found. Please register.' });
     }
 
     const user = result.rows[0];
@@ -79,17 +85,24 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid password. Try again.' });
     }
 
+    // Reset daily tasks count if day changed
+    const today = new Date().toISOString().split('T')[0];
+    const lastActive = user.last_active_date ? new Date(user.last_active_date).toISOString().split('T')[0] : '';
+    if (today !== lastActive) {
+      await pool.query('UPDATE users SET daily_task_count = 0, last_active_date = CURRENT_DATE WHERE id = $1', [user.id]);
+      user.daily_task_count = 0;
+    }
+
     const { password: _, ...userSafe } = user;
     res.status(200).json({ success: true, user: userSafe });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 3. DAILY CHECK-IN STREAK (Retention Booster)
+// 3. DAILY CHECKIN
 app.post('/api/user/daily-checkin', async (req, res) => {
   const { userId } = req.body;
-
   try {
     const userRes = await pool.query('SELECT points, last_active_date FROM users WHERE id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
@@ -99,24 +112,24 @@ app.post('/api/user/daily-checkin', async (req, res) => {
     const lastActive = user.last_active_date ? new Date(user.last_active_date).toISOString().split('T')[0] : '';
 
     if (today === lastActive) {
-      return res.status(400).json({ success: false, message: 'Already claimed today! Check back tomorrow.' });
+      return res.status(400).json({ success: false, message: 'Already claimed today! Come back tomorrow.' });
     }
 
     const updated = await pool.query(
       `UPDATE users 
-       SET points = points + 20, last_active_date = CURRENT_DATE, daily_task_count = 0 
+       SET points = points + 25, last_active_date = CURRENT_DATE, daily_task_count = 0 
        WHERE id = $1 
-       RETURNING id, phone, points, daily_task_count`,
+       RETURNING id, name, phone, points, daily_task_count`,
       [userId]
     );
 
-    res.json({ success: true, message: '🎉 Daily Check-in Bonus +20 pts added!', user: updated.rows[0] });
+    res.json({ success: true, message: '🎉 +25 Points added for Daily Streak!', user: updated.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 4. COMPLETE TASK (Anti-Spam & Limit Guard)
+// 4. COMPLETE TASK (Daily Cap 130 tasks = 1 Recharge Pack Target)
 app.post('/api/tasks/complete', async (req, res) => {
   const { userId, taskId, points } = req.body;
 
@@ -124,8 +137,8 @@ app.post('/api/tasks/complete', async (req, res) => {
     const userRes = await pool.query('SELECT daily_task_count, points FROM users WHERE id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
-    if (userRes.rows[0].daily_task_count >= 12) {
-      return res.status(403).json({ success: false, message: 'Daily limit of 12 tasks reached for today!' });
+    if (userRes.rows[0].daily_task_count >= 130) {
+      return res.status(403).json({ success: false, message: 'Daily task limit of 130 tasks reached for today!' });
     }
 
     await pool.query('BEGIN');
@@ -138,7 +151,7 @@ app.post('/api/tasks/complete', async (req, res) => {
       `UPDATE users 
        SET points = points + $1, daily_task_count = daily_task_count + 1 
        WHERE id = $2 
-       RETURNING id, phone, points, daily_task_count`,
+       RETURNING id, name, phone, points, daily_task_count`,
       [points, userId]
     );
     await pool.query('COMMIT');
@@ -150,7 +163,7 @@ app.post('/api/tasks/complete', async (req, res) => {
   }
 });
 
-// 5. STORE REDEMPTION
+// 5. STORE RECHARGE REQUEST
 app.post('/api/store/recharge', async (req, res) => {
   const { userId, phone, operator } = req.body;
 
@@ -170,14 +183,14 @@ app.post('/api/store/recharge', async (req, res) => {
     );
     await pool.query('COMMIT');
 
-    res.status(200).json({ success: true, message: 'Recharge request placed successfully' });
+    res.status(200).json({ success: true, message: 'Recharge request submitted successfully' });
   } catch (err) {
     await pool.query('ROLLBACK');
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 6. ADMIN APIS (View & Manage Recharges)
+// 6. ADMIN GET RECHARGES
 app.get('/api/admin/recharges', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
@@ -186,10 +199,10 @@ app.get('/api/admin/recharges', async (req, res) => {
 
   try {
     const recharges = await pool.query(
-      `SELECT r.*, u.phone as account_phone 
+      `SELECT r.*, u.name as user_name, u.phone as account_phone 
        FROM recharges r 
        JOIN users u ON r.user_id = u.id 
-       ORDER BY r.requested_at DESC LIMIT 50`
+       ORDER BY r.requested_at DESC LIMIT 100`
     );
     res.json({ success: true, data: recharges.rows });
   } catch (err) {
@@ -197,6 +210,7 @@ app.get('/api/admin/recharges', async (req, res) => {
   }
 });
 
+// 7. ADMIN UPDATE STATUS
 app.post('/api/admin/recharge/status', async (req, res) => {
   const token = req.headers['admin-secret'];
   if (token !== ADMIN_SECRET) {
@@ -213,5 +227,5 @@ app.post('/api/admin/recharge/status', async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Production server running on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
