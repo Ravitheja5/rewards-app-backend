@@ -122,12 +122,13 @@ app.post('/api/rewards/redeem', async (req, res) => {
       [pointsCost, user.id]
     );
 
+    
+    // Insert redemption record with exact 8 parameters
     const redemption = await pool.query(
-      'INSERT INTO redemptions (user_id, phone, target_phone, operator, points_cost, points_spent, reward_type, pack_name, status) VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8) RETURNING *',
-      [user.id, userPhone, target, operator || 'Jio', pointsCost, rewardType, 'PENDING']
+      'INSERT INTO redemptions (user_id, phone, target_phone, operator, points_cost, points_spent, reward_type, pack_name, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
+      [user.id, userPhone, target, operator || 'Jio', pointsCost, pointsCost, rewardType, '₹49 - 1-Day Unlimited Data Pack', 'PENDING']
     );
-
-    res.json({
+res.json({
       success: true,
       message: 'Recharge request submitted successfully!',
       user: updatedUser.rows[0],
@@ -157,6 +158,22 @@ app.post('/api/admin/redemptions/approve', async (req, res) => {
     res.json({ success: true, message: 'Recharge marked as completed', redemption: result.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// Admin: Fetch all data safely
+app.get('/api/admin/all', async (req, res) => {
+  try {
+    const redemptions = await pool.query('SELECT * FROM redemptions ORDER BY id DESC');
+    const users = await pool.query('SELECT id, name, phone, points, daily_task_count FROM users ORDER BY id DESC');
+    res.json({
+      success: true,
+      redemptions: redemptions.rows || [],
+      users: users.rows || []
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message, redemptions: [], users: [] });
   }
 });
 
