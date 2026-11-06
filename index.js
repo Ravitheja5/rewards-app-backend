@@ -138,5 +138,27 @@ app.post('/api/rewards/redeem', async (req, res) => {
   }
 });
 
+
+// Admin: Fetch all pending redemptions
+app.get('/api/admin/redemptions', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM redemptions ORDER BY id DESC');
+    res.json({ success: true, count: result.rows.length, redemptions: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Admin: Approve/Complete a recharge
+app.post('/api/admin/redemptions/approve', async (req, res) => {
+  try {
+    const { id } = req.body;
+    const result = await pool.query('UPDATE redemptions SET status = 'COMPLETED' WHERE id = $1 RETURNING *', [id]);
+    res.json({ success: true, message: 'Recharge marked as completed', redemption: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
