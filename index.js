@@ -330,6 +330,57 @@ app.post('/api/rewards/redeem', async (req, res) => {
   }
 });
 
+
+// 1. ALL REDEMPTIONS FOR ADMIN
+app.get('/api/admin/redemptions', async (req, res) => {
+  try {
+    const list = await pool.query('SELECT * FROM redemptions ORDER BY created_at DESC;');
+    const users = await pool.query('SELECT id, name, phone, points, daily_task_count FROM users ORDER BY points DESC;');
+    res.json({ success: true, redemptions: list.rows, users: users.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 2. APPROVE / COMPLETE RECHARGE (ADMIN)
+app.post('/api/admin/redemptions/update', async (req, res) => {
+  const { id, status } = req.body;
+  try {
+    await pool.query('UPDATE redemptions SET status = $1 WHERE id = $2;', [status, id]);
+    res.json({ success: true, message: 'Status updated to ' + status });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 3. SECURE REDEEM ROUTE
+app.post('/api/rewards/redeem', async (req, res) => {
+  const { phone, targetPhone, operator, pointsCost } = req.body;
+  if (!phone || !targetPhone || !pointsCost) {
+    return res.status(400).json({ success: false, message: 'Invalid payload' });
+  }
+
+  try {
+    const userRes = await pool.query('SELECT id, points FROM users WHERE phone = $1;', [phone]);
+    if (userRes.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (userRes.rows[0].points < pointsCost) {
+      return res.status(400).json({ success: false, message: 'Insufficient points balance in database' });
+    }
+
+    await pool.query('UPDATE users SET points = points - $1 WHERE phone = $2;', [pointsCost, phone]);
+    const red = await pool.query(
+      'INSERT INTO redemptions (phone, target_phone, operator, points_spent, status) VALUES ($1, $2, $3, $4, \'PENDING\') RETURNING *;',
+      [phone, targetPhone, operator, pointsCost]
+    );
+
+    const updatedUser = await pool.query('SELECT id, name, phone, points, daily_task_count FROM users WHERE phone = $1;', [phone]);
+    res.json({ success: true, user: updatedUser.rows[0], redemption: red.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
