@@ -331,7 +331,7 @@ app.post('/api/rewards/redeem', async (req, res) => {
   const validOperators = ['Jio', 'Airtel', 'Vi', 'BSNL'];
 
   if (!targetPhone || !/^[6-9]d{9}$/.test(targetPhone)) {
-    return res.status(400).json({ success: false, message: 'Valid 10-digit Indian mobile number ivvandi!' });
+    return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit Indian mobile number.' });
   }
 
   if (!operator || !validOperators.includes(operator)) {
