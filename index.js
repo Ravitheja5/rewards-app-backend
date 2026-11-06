@@ -45,19 +45,8 @@ app.get('/api/user/me', async (req, res) => {
   }
 });
 
-  try {
-    const result = await pool.query(
-      'SELECT id, name, phone, points, daily_task_count, referral_code FROM users WHERE phone = $1',
-      [phone]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
     res.json({ success: true, user: result.rows[0] });
-  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
-  }
-});
 
 // 1. REGISTER
 // Device check helper
@@ -117,16 +106,9 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-  }
 
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Account not found. Please register.' });
-    }
 
     const user = result.rows[0];
-    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid password. Try again.' });
     }
@@ -134,16 +116,12 @@ app.post('/api/auth/login', async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const lastActive = user.last_active_date ? new Date(user.last_active_date).toISOString().split('T')[0] : '';
     if (today !== lastActive) {
-      await pool.query('UPDATE users SET daily_task_count = 0, last_active_date = CURRENT_DATE WHERE id = $1', [user.id]);
       user.daily_task_count = 0;
     }
 
     const { password: _, ...userSafe } = user;
     res.status(200).json({ success: true, user: userSafe });
-  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
-  }
-});
 
 // 3. DAILY CHECKIN
 app.post('/api/user/daily-checkin', async (req, res) => {
