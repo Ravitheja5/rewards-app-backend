@@ -14,7 +14,7 @@ function verifyCpxHash(transId, incomingHash, appSecret) {
 module.exports = function(pool) {
   router.all('/api/webhooks/cpx', async (req, res) => {
     const params = { ...req.query, ...req.body };
-    console.log('[CPX Incoming Webhook Request]:', JSON.stringify(params));
+    console.log('[CPX Webhook Callback]:', JSON.stringify(params));
 
     const {
       status,
@@ -39,7 +39,6 @@ module.exports = function(pool) {
 
     if (APP_SECRET && hash) {
       if (!verifyCpxHash(trans_id, hash, APP_SECRET)) {
-        console.error(`[CPX Security] Hash mismatch for trans_id: ${trans_id}`);
         return res.status(401).send('ERROR: Invalid security hash');
       }
     }
@@ -53,7 +52,7 @@ module.exports = function(pool) {
     try {
       await client.query('BEGIN');
 
-      // Match user by ID (e.g. 2) OR by 10-digit phone number
+      // 1. Fetch user by internal ID or Phone
       const userRes = await client.query(
         'SELECT id, phone, points FROM users WHERE id::text = $1 OR RIGHT(phone, 10) = RIGHT($1, 10) FOR UPDATE',
         [cleanUser]
@@ -61,19 +60,19 @@ module.exports = function(pool) {
 
       if (userRes.rows.length === 0) {
         await client.query('ROLLBACK');
-        console.warn(`[CPX Warning] User not found for identifier: ${cleanUser}`);
         return res.status(404).send('ERROR: User not found');
       }
 
       const user = userRes.rows[0];
       const isCancellation = String(status) === '2';
 
+      // 2. Check if trans_id already exists in ledger
       const transRes = await client.query(
         'SELECT * FROM cpx_transactions WHERE trans_id = $1 FOR UPDATE',
         [trans_id]
       );
 
-      // Handle Reversal / Cancellation
+      // Handle Reversal
       if (isCancellation) {
         if (transRes.rows.length === 0) {
           await client.query(
@@ -99,9 +98,7 @@ module.exports = function(pool) {
         );
 
         await client.query(
-          `UPDATE cpx_transactions 
-           SET status = 2, is_reversed = TRUE, reversed_at = NOW(), updated_at = NOW()
-           WHERE id = $1`,
+          'UPDATE cpx_transactions SET status = 2, is_reversed = TRUE, reversed_at = NOW(), updated_at = NOW() WHERE id = $1',
           [existing.id]
         );
 
@@ -109,18 +106,19 @@ module.exports = function(pool) {
         return res.status(200).send('OK');
       }
 
-      // Idempotency: prevent double crediting
+      // 3. Idempotency Check: Already processed
       if (transRes.rows.length > 0) {
         await client.query('COMMIT');
         return res.status(200).send('OK');
       }
 
-      // Calculate reward points
+      // 4. Calculate points
       const usdVal = parseFloat(amount_usd || 0);
       const isBonus = type === 'bonus' || type === 'screenout_bonus';
       const factor = isBonus ? BONUS_FACTOR : CURRENCY_FACTOR;
       const pointsToCredit = Math.round(usdVal * factor);
 
+      // 5. Atomic Update user points
       if (pointsToCredit > 0) {
         await client.query(
           'UPDATE users SET points = points + $1 WHERE id = $2',
@@ -128,14 +126,16 @@ module.exports = function(pool) {
         );
       }
 
+      // 6. Insert into cpx_transactions ledger
       await client.query(
         `INSERT INTO cpx_transactions 
          (trans_id, user_id, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
-         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           trans_id,
           user.id,
           type || (isBonus ? 'bonus' : 'complete'),
+          1,
           usdVal,
           parseFloat(amount_local || 0),
           pointsToCredit,
@@ -146,12 +146,11 @@ module.exports = function(pool) {
       );
 
       await client.query('COMMIT');
-      console.log(`[CPX Success] Credited ${pointsToCredit} points to user ${user.id} (${user.phone})`);
       return res.status(200).send('OK');
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[CPX Webhook Error]', err);
-      return res.status(500).send('ERROR: Transaction failure');
+      console.error('[CPX Database Error Details]:', err.message);
+      return res.status(500).send('ERROR: ' + err.message);
     } finally {
       client.release();
     }
