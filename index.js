@@ -266,7 +266,7 @@ app.post('/api/tasks/start', (req, res) => {
   if (!phone || !taskId) return res.status(400).json({ success: false, message: 'Invalid payload' });
   const key = `${phone}_${taskId}`;
   taskTimers.set(key, Date.now());
-  res.json({ success: true, message: 'Task timer started', minSeconds: 20 });
+  res.json({ success: true, message: 'Task timer started', minSeconds: 60 });
 });
 
 app.post('/api/tasks/claim', async (req, res) => {
@@ -279,10 +279,10 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 
   const elapsed = (Date.now() - startTime) / 1000;
-  if (elapsed < 20) {
+  if (elapsed < 60) {
     return res.status(400).json({ 
       success: false, 
-      message: `Inka ${Math.ceil(20 - elapsed)} seconds task chudali. Fast ga claim cheyadam kudaradu!` 
+      message: `Inka ${Math.ceil(60 - elapsed)} seconds task chudali. Fast ga claim cheyadam kudaradu!` 
     });
   }
 
