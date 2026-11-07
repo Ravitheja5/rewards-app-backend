@@ -52,7 +52,7 @@ module.exports = function(pool) {
     try {
       await client.query('BEGIN');
 
-      // 1. Fetch user by internal ID or Phone
+      // 1. Fetch user by internal id or phone number
       const userRes = await client.query(
         'SELECT id, phone, points FROM users WHERE id::text = $1 OR RIGHT(phone, 10) = RIGHT($1, 10) LIMIT 1 FOR UPDATE',
         [cleanUser]
@@ -64,7 +64,8 @@ module.exports = function(pool) {
       }
 
       const user = userRes.rows[0];
-      const isCancellation = String(status) === '2';
+      const statusCode = parseInt(status, 10) || 1;
+      const isCancellation = statusCode === 2;
 
       // 2. Check existing transaction in ledger
       const transRes = await client.query(
@@ -72,7 +73,7 @@ module.exports = function(pool) {
         [trans_id]
       );
 
-      // Handle Cancellation / Reversal
+      // Handle Reversal
       if (isCancellation) {
         if (transRes.rows.length === 0) {
           await client.query(
@@ -106,13 +107,13 @@ module.exports = function(pool) {
         return res.status(200).send('OK');
       }
 
-      // Idempotency: if already processed
+      // Idempotency: return OK if already credited
       if (transRes.rows.length > 0) {
         await client.query('COMMIT');
         return res.status(200).send('OK');
       }
 
-      // 3. Points calculation
+      // 3. Points Calculation
       const usdVal = parseFloat(amount_usd || 0);
       const isBonus = type === 'bonus' || type === 'screenout_bonus';
       const factor = isBonus ? BONUS_FACTOR : CURRENCY_FACTOR;
@@ -126,15 +127,16 @@ module.exports = function(pool) {
         );
       }
 
-      // 5. Insert into ledger with user.id (integer primary key)
+      // 5. Insert exact matching columns into cpx_transactions
       await client.query(
         `INSERT INTO cpx_transactions 
          (trans_id, user_id, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
-         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           trans_id,
           user.id,
           type || (isBonus ? 'bonus' : 'complete'),
+          1,
           usdVal,
           parseFloat(amount_local || 0),
           pointsToCredit,
@@ -148,7 +150,7 @@ module.exports = function(pool) {
       return res.status(200).send('OK');
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[CPX Database Error Details]:', err);
+      console.error('[CPX Webhook Error]:', err.message);
       return res.status(500).send('ERROR: ' + err.message);
     } finally {
       client.release();
