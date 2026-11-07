@@ -54,7 +54,7 @@ module.exports = function(pool) {
 
       // 1. Fetch user by internal ID or Phone
       const userRes = await client.query(
-        'SELECT id, phone, points FROM users WHERE id::text = $1 OR RIGHT(phone, 10) = RIGHT($1, 10) FOR UPDATE',
+        'SELECT id, phone, points FROM users WHERE id::text = $1 OR RIGHT(phone, 10) = RIGHT($1, 10) LIMIT 1 FOR UPDATE',
         [cleanUser]
       );
 
@@ -66,20 +66,20 @@ module.exports = function(pool) {
       const user = userRes.rows[0];
       const isCancellation = String(status) === '2';
 
-      // 2. Check if trans_id already exists in ledger
+      // 2. Check existing transaction in ledger
       const transRes = await client.query(
         'SELECT * FROM cpx_transactions WHERE trans_id = $1 FOR UPDATE',
         [trans_id]
       );
 
-      // Handle Reversal (status = 2)
+      // Handle Cancellation / Reversal
       if (isCancellation) {
         if (transRes.rows.length === 0) {
           await client.query(
             `INSERT INTO cpx_transactions 
-             (trans_id, user_id, phone, event_type, status, amount_usd, points_awarded, is_reversed, reversed_at, raw_payload)
-             VALUES ($1, $2, $3, 'reversed_untracked', 2, 0, 0, TRUE, NOW(), $4)`,
-            [trans_id, user.id, user.phone, JSON.stringify(params)]
+             (trans_id, user_id, event_type, status, amount_usd, points_awarded, is_reversed, reversed_at, raw_payload)
+             VALUES ($1, $2, 'reversed_untracked', 2, 0, 0, TRUE, NOW(), $3)`,
+            [trans_id, user.id, JSON.stringify(params)]
           );
           await client.query('COMMIT');
           return res.status(200).send('OK');
@@ -106,19 +106,19 @@ module.exports = function(pool) {
         return res.status(200).send('OK');
       }
 
-      // 3. Idempotency Check: Already processed
+      // Idempotency: if already processed
       if (transRes.rows.length > 0) {
         await client.query('COMMIT');
         return res.status(200).send('OK');
       }
 
-      // 4. Calculate points
+      // 3. Points calculation
       const usdVal = parseFloat(amount_usd || 0);
       const isBonus = type === 'bonus' || type === 'screenout_bonus';
       const factor = isBonus ? BONUS_FACTOR : CURRENCY_FACTOR;
       const pointsToCredit = Math.round(usdVal * factor);
 
-      // 5. Atomic Update user points
+      // 4. Update user points
       if (pointsToCredit > 0) {
         await client.query(
           'UPDATE users SET points = points + $1 WHERE id = $2',
@@ -126,17 +126,15 @@ module.exports = function(pool) {
         );
       }
 
-      // 6. Insert into cpx_transactions ledger (with phone column included)
+      // 5. Insert into ledger with user.id (integer primary key)
       await client.query(
         `INSERT INTO cpx_transactions 
-         (trans_id, user_id, phone, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         (trans_id, user_id, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
+         VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9)`,
         [
           trans_id,
           user.id,
-          user.phone,
           type || (isBonus ? 'bonus' : 'complete'),
-          1,
           usdVal,
           parseFloat(amount_local || 0),
           pointsToCredit,
@@ -150,7 +148,7 @@ module.exports = function(pool) {
       return res.status(200).send('OK');
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('[CPX Database Error Details]:', err.message);
+      console.error('[CPX Database Error Details]:', err);
       return res.status(500).send('ERROR: ' + err.message);
     } finally {
       client.release();
