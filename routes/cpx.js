@@ -72,14 +72,14 @@ module.exports = function(pool) {
         [trans_id]
       );
 
-      // Handle Reversal
+      // Handle Reversal (status = 2)
       if (isCancellation) {
         if (transRes.rows.length === 0) {
           await client.query(
             `INSERT INTO cpx_transactions 
-             (trans_id, user_id, event_type, status, amount_usd, points_awarded, is_reversed, reversed_at, raw_payload)
-             VALUES ($1, $2, 'reversed_untracked', 2, 0, 0, TRUE, NOW(), $3)`,
-            [trans_id, user.id, JSON.stringify(params)]
+             (trans_id, user_id, phone, event_type, status, amount_usd, points_awarded, is_reversed, reversed_at, raw_payload)
+             VALUES ($1, $2, $3, 'reversed_untracked', 2, 0, 0, TRUE, NOW(), $4)`,
+            [trans_id, user.id, user.phone, JSON.stringify(params)]
           );
           await client.query('COMMIT');
           return res.status(200).send('OK');
@@ -126,14 +126,15 @@ module.exports = function(pool) {
         );
       }
 
-      // 6. Insert into cpx_transactions ledger
+      // 6. Insert into cpx_transactions ledger (with phone column included)
       await client.query(
         `INSERT INTO cpx_transactions 
-         (trans_id, user_id, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         (trans_id, user_id, phone, event_type, status, amount_usd, amount_local, points_awarded, offer_id, ip_click, raw_payload)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           trans_id,
           user.id,
+          user.phone,
           type || (isBonus ? 'bonus' : 'complete'),
           1,
           usdVal,
